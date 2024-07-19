@@ -8,6 +8,8 @@ import logging
 import streamlit as st
 from loguru import logger
 
+DEBUG = int(os.environ.get("DEBUG", "0"))
+
 def generate_together(
     model,
     messages,
