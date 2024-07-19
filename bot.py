@@ -40,6 +40,7 @@ default_reference_models = [
     "Qwen/Qwen1.5-72B",
     "Qwen/Qwen2-72B-Instruct",
     "meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
+    "deepseek-ai/deepseek-llm-67b-chat"
 ]
 
 # All available models
@@ -52,6 +53,7 @@ all_models = [
     "Qwen/Qwen1.5-72B",
     "microsoft/WizardLM-2-8x22B",
     "mistralai/Mixtral-8x22B-Instruct-v0.1",
+    "deepseek-ai/deepseek-llm-67b-chat",
 ]
 
 # Default system prompt
