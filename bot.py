@@ -166,7 +166,7 @@ welcome_message = """
 
 Made by Võ Mai Thế Long 👨‍🏫
 
-Powered by LLM models from Groq.com
+Powered by Together.ai
 """
 
 def clean_response(response_text):
@@ -285,7 +285,7 @@ def main():
         st.session_state.conversation_deleted = False
         st.experimental_rerun()
 
-    st.header("Hello! I am MoA chatbot, please send me your questions below.")
+    st.markdown("Hello! I am MoA chatbot, please send me your questions below.")
 
     for message in st.session_state.messages[1:]:
         with st.chat_message(message["role"]):
