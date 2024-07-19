@@ -3,20 +3,10 @@ import json
 import requests
 import openai
 import copy
-import nltk
+import types
+import logging
 import streamlit as st
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
 from loguru import logger
-from dotenv import load_dotenv
-from tenacity import retry, wait_exponential, stop_after_attempt
-
-nltk.download('punkt')
-nltk.download('stopwords')
-
-load_dotenv()
-
-DEBUG = int(os.environ.get("DEBUG", "0"))
 
 def generate_together(
     model,
@@ -57,34 +47,33 @@ def generate_together(
             logger.error(f"Response content: {response.content}")
             raise
 
-# Function to process streamed responses
-def process_stream(stream):
-    response_container = st.empty()
+def process_stream(stream, response_container):
     response_text = ""
     for line in stream:
         if line:
-            decoded_line = line.decode('utf-8')
+            decoded_line = line.decode('utf-8').strip()
             if decoded_line.startswith("data: "):
                 try:
-                    chunk = json.loads(decoded_line[6:])["choices"][0]["delta"]["content"]
-                    response_text += chunk
-                    response_container.markdown(response_text)
+                    chunk = json.loads(decoded_line[6:])
+                    if 'choices' in chunk and len(chunk['choices']) > 0 and 'delta' in chunk['choices'][0]:
+                        if 'content' in chunk['choices'][0]['delta']:
+                            response_text += chunk['choices'][0]['delta']['content']
+                            response_container.markdown(response_text)
+                            logger.info(f"Streaming chunk: {chunk['choices'][0]['delta']['content']}")
                 except json.JSONDecodeError as e:
+                    if decoded_line == "data: [DONE]":
+                        break
                     logger.error(f"Streaming JSON decode error: {e}")
                     logger.error(f"Streaming line content: {decoded_line}")
-                    break
-            elif decoded_line.startswith("event: done"):
+            elif decoded_line == "[DONE]":
                 break
     return response_text
 
-def inject_references_to_messages(
-    messages,
-    references,
-):
+def inject_references_to_messages(messages, references):
     messages = copy.deepcopy(messages)
-    system = f"""Bạn đã được cung cấp một tập hợp các phản hồi từ các mô hình mã nguồn mở khác nhau cho truy vấn người dùng mới nhất. Nhiệm vụ của bạn là tổng hợp các phản hồi này thành một câu trả lời duy nhất, chất lượng cao. Điều quan trọng là phải đánh giá phê phán thông tin được cung cấp trong các phản hồi này, nhận ra rằng một số thông tin có thể bị thiên vị hoặc sai lầm. Câu trả lời của bạn không nên đơn thuần sao chép các câu trả lời đã cho mà nên cung cấp một câu trả lời tinh chỉnh, chính xác và toàn diện cho yêu cầu. Đảm bảo câu trả lời của bạn được cấu trúc tốt, mạch lạc và tuân theo các tiêu chuẩn cao nhất về độ chính xác và độ tin cậy. Đảm bảo giữ nguyên các thuật ngữ chuyên ngành và đảm bảo rằng ý nghĩa và ngữ cảnh ban đầu được giữ nguyên.
+    system = f"""You have been provided a set of responses from various open-source models for the latest user query. Your task is to synthesize these responses into a single high-quality answer. Critically evaluate the information provided in these responses, recognizing that some information may be biased or incorrect. Your answer should not merely copy the given responses but provide a refined, accurate, and comprehensive answer to the request. Ensure your answer is well-structured, coherent, and adheres to the highest standards of accuracy and reliability. Keep the original terminology and ensure the meaning and context are preserved.
 
-Câu trả lời từ các model:"""
+Responses from models:"""
 
     for i, reference in enumerate(references):
         system += f"\n{i+1}. {reference}"
@@ -95,6 +84,30 @@ Câu trả lời từ các model:"""
         messages = [{"role": "system", "content": system}] + messages
 
     return messages
+
+def clean_response(response_text):
+    # Function to clean the response by removing unwanted tags or placeholders
+    return response_text.replace('\n[im_start]', '').replace('\n[im_end]', '').replace('lim_start', '').replace('lim_end', '')
+
+def generate_initial_responses(models, messages, temperature, max_tokens, generate_fn):
+    initial_responses = []
+    for model in models:
+        logger.info(f"Generating initial response using proposer model {model}")
+        response = generate_fn(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            streaming=False  # Ensure streaming is False for proposer models
+        )
+        if isinstance(response, types.GeneratorType):
+            full_response = "".join(response)
+        else:
+            full_response = response
+        cleaned_response = clean_response(full_response)
+        logger.info(f"Proposer model {model} generated response: {cleaned_response[:200]}")
+        initial_responses.append(cleaned_response)
+    return initial_responses
 
 def generate_with_references(
     model,
@@ -107,115 +120,37 @@ def generate_with_references(
     if len(references) > 0:
         messages = inject_references_to_messages(messages, references)
 
-    return generate_fn(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    # Generate initial responses from proposer models
+    initial_responses = generate_initial_responses(st.session_state.selected_models, messages, temperature, max_tokens, generate_fn)
+    
+    # Combine initial responses into a single reference string
+    combined_references = "\n\n".join(initial_responses)
+    logger.info(f"Combined references (first 200 chars): {combined_references[:200]}")
 
-def google_search(query, num_results=10):  # Increase number of search results
-    api_key = os.environ.get('GOOGLE_API_KEY')
-    cse_id = os.environ.get('GOOGLE_CSE_ID')
-    if not api_key or not cse_id:
-        raise ValueError("Google API key or Custom Search Engine ID is missing")
+    # Inject combined references into the messages
+    messages = inject_references_to_messages(messages, [combined_references])
+    logger.info(f"Messages after injecting combined references: {messages}")
 
-    search_url = "https://www.googleapis.com/customsearch/v1"
-    params = {
-        "q": query,
-        "key": api_key,
-        "cx": cse_id,
-        "num": num_results
-    }
-
+    # Generate the final response using the main model (aggregator)
     try:
-        response = requests.get(search_url, params=params, timeout=10)
-        response.raise_for_status()
-        search_results = response.json()
-    except requests.exceptions.HTTPError as err:
-        if err.response.status_code == 400:
-            logger.error("Bad Request: ", err)
-        elif err.response.status_code == 401:
-            logger.error("Unauthorized: ", err)
-        elif err.response.status_code == 403:
-            logger.error("Forbidden: ", err)
-        raise
-    except requests.exceptions.Timeout as e:
-        logger.error("Timeout error: ", e)
-        raise
+        response_container = st.empty()
+        response = generate_fn(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+        logger.info(f"Generated final response (first 200 chars): {response[:200] if not isinstance(response, types.GeneratorType) else 'generator'}")
+
+        # Handle generator response
+        if isinstance(response, types.GeneratorType):
+            full_response = process_stream(response, response_container)
+            logger.info(f"Full response (first 200 chars): {full_response[:200]}")
+            return full_response
+        return response
     except requests.exceptions.RequestException as e:
-        logger.error("HTTP error: ", e)
+        logger.error(f"Request exception: {e}")
+        if e.response is not None:
+            logger.error(f"Response content: {e.response.content}")
         raise
-
-    return search_results
-
-def extract_snippets(search_results):
-    snippets = []
-    if "items" in search_results:
-        for item in search_results["items"]:
-            snippets.append(item["snippet"])
-    return snippets
-
-def extract_full_texts(search_results):
-    full_texts = []
-    if "items" in search_results:
-        for item in search_results["items"]:
-            full_texts.append(item["snippet"] + "\n\n" + item["link"])
-    return full_texts
-
-def extract_keywords(text):
-    # Tokenize và loại bỏ stopwords
-    stop_words = set(stopwords.words('english'))
-    word_tokens = word_tokenize(text.lower())
-    keywords = [word for word in word_tokens if word.isalnum() and word not in stop_words]
-    return keywords
-
-def expand_query(conversation_history, current_query):
-    # Trích xuất từ khóa từ lịch sử cuộc trò chuyện
-    history_keywords = extract_keywords(conversation_history)
-    
-    # Trích xuất từ khóa từ câu hỏi hiện tại
-    current_keywords = extract_keywords(current_query)
-    
-    # Kết hợp và loại bỏ trùng lặp
-    all_keywords = list(set(history_keywords + current_keywords))
-    
-    # Tạo query mở rộng
-    expanded_query = " ".join(all_keywords)
-    
-    return expanded_query
-
-def generate_search_query(conversation_history, current_query):
-    # Sử dụng model google/gemma-2-27b-it để tạo query tìm kiếm
-    model = "google/gemma-2-8b-it"
-    
-    # Tạo prompt cho model
-    system_prompt = """Bạn là một trợ lý AI chuyên nghiệp trong việc tạo query tìm kiếm. 
-    Nhiệm vụ của bạn là phân tích lịch sử cuộc trò chuyện và câu hỏi hiện tại của người dùng, 
-    sau đó tạo ra một query tìm kiếm ngắn gọn, chính xác và hiệu quả. 
-    Query này sẽ được sử dụng để tìm kiếm thông tin trên web.
-    Hãy đảm bảo query bao gồm các từ khóa quan trọng và bối cảnh cần thiết."""
-
-    # Remove the language instruction from the user prompt
-    user_prompt = f"""Lịch sử cuộc trò chuyện:
-    {conversation_history}
-    
-    Câu hỏi hiện tại của người dùng:
-    {current_query}
-    
-    Hãy tạo một query tìm kiếm ngắn gọn và hiệu quả dựa trên thông tin trên."""
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt}
-    ]
-
-    # Gọi API để generate query
-    generated_query = generate_together(
-        model=model,
-        messages=messages,
-        max_tokens=100,
-        temperature=0.7
-    )
-
-    return generated_query.strip()
