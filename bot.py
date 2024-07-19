@@ -35,12 +35,11 @@ class SharedValue:
         with self.lock:
             return self.value
 
-# Updated default reference models
 default_reference_models = [
-    "Qwen/Qwen2-72B-Instruct",
     "google/gemma-2-27b-it",
     "Qwen/Qwen1.5-72B",
-    "meta-llama/Llama-3-70b-chat-hf"
+    "Qwen/Qwen2-72B-Instruct",
+    "meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
 ]
 
 # All available models
@@ -48,11 +47,11 @@ all_models = [
     "google/gemma-2-27b-it",
     "Qwen/Qwen1.5-110B-Chat",
     "meta-llama/Llama-3-70b-chat-hf",
-    "meta-llama/Meta-Llama-3-70B",
+    "meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
     "Qwen/Qwen2-72B-Instruct",
     "Qwen/Qwen1.5-72B",
     "microsoft/WizardLM-2-8x22B",
-    "mistralai/Mixtral-8x22B",
+    "mistralai/Mixtral-8x22B-Instruct-v0.1",
 ]
 
 # Default system prompt
