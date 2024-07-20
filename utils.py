@@ -7,6 +7,7 @@ import types
 import logging
 import streamlit as st
 from loguru import logger
+import concurrent.futures
 
 DEBUG = int(os.environ.get("DEBUG", "0"))
 
@@ -88,12 +89,12 @@ Responses from models:"""
     return messages
 
 def clean_response(response_text):
-    # Function to clean the response by removing unwanted tags or placeholders
     return response_text.replace('\n[im_start]', '').replace('\n[im_end]', '').replace('lim_start', '').replace('lim_end', '')
 
 def generate_initial_responses(models, messages, temperature, max_tokens, generate_fn):
     initial_responses = []
-    for model in models:
+
+    def get_response(model):
         logger.info(f"Generating initial response using proposer model {model}")
         response = generate_fn(
             model=model,
@@ -108,7 +109,16 @@ def generate_initial_responses(models, messages, temperature, max_tokens, genera
             full_response = response
         cleaned_response = clean_response(full_response)
         logger.info(f"Proposer model {model} generated response: {cleaned_response[:200]}")
-        initial_responses.append(cleaned_response)
+        return cleaned_response
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_model = {executor.submit(get_response, model): model for model in models}
+        for future in concurrent.futures.as_completed(future_to_model):
+            try:
+                initial_responses.append(future.result())
+            except Exception as e:
+                logger.error(f"Error generating response for model {future_to_model[future]}: {e}")
+
     return initial_responses
 
 def generate_with_references(
@@ -122,18 +132,13 @@ def generate_with_references(
     if len(references) > 0:
         messages = inject_references_to_messages(messages, references)
 
-    # Generate initial responses from proposer models
     initial_responses = generate_initial_responses(st.session_state.selected_models, messages, temperature, max_tokens, generate_fn)
-    
-    # Combine initial responses into a single reference string
     combined_references = "\n\n".join(initial_responses)
     logger.info(f"Combined references (first 200 chars): {combined_references[:200]}")
 
-    # Inject combined references into the messages
     messages = inject_references_to_messages(messages, [combined_references])
     logger.info(f"Messages after injecting combined references: {messages}")
 
-    # Generate the final response using the main model (aggregator)
     try:
         response_container = st.empty()
         response = generate_fn(
@@ -145,7 +150,6 @@ def generate_with_references(
 
         logger.info(f"Generated final response (first 200 chars): {response[:200] if not isinstance(response, types.GeneratorType) else 'generator'}")
 
-        # Handle generator response
         if isinstance(response, types.GeneratorType):
             full_response = process_stream(response, response_container)
             logger.info(f"Full response (first 200 chars): {full_response[:200]}")
