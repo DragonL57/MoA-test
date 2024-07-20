@@ -229,7 +229,7 @@ def main():
                 st.session_state.main_model = main_model
 
             temperature = st.slider("Temperature", 0.0, 2.0, 0.5, 0.1)
-            max_tokens = st.slider("Max tokens", 1, 8192, 2048, 1)
+            max_tokens = st.slider("Max tokens", 1, 8192, 4096, 1)
 
             st.subheader("Reference Models")
             for ref_model in all_models:
