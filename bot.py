@@ -12,6 +12,7 @@ from loguru import logger
 from utils import (
     generate_together,
     generate_with_references,
+    generate_initial_responses,
     DEBUG,
 )
 import streamlit as st
@@ -39,12 +40,12 @@ default_reference_models = [
     "google/gemma-2-27b-it",
     "Qwen/Qwen1.5-72B",
     "Qwen/Qwen2-72B-Instruct",
-    "meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
-    "deepseek-ai/deepseek-llm-67b-chat"
+    "deepseek-ai/deepseek-llm-67b-chat",
 ]
 
 # All available models
 all_models = [
+    "deepseek-ai/deepseek-llm-67b-chat",
     "google/gemma-2-27b-it",
     "Qwen/Qwen1.5-110B-Chat",
     "meta-llama/Llama-3-70b-chat-hf",
@@ -53,7 +54,6 @@ all_models = [
     "Qwen/Qwen1.5-72B",
     "microsoft/WizardLM-2-8x22B",
     "mistralai/Mixtral-8x22B-Instruct-v0.1",
-    "deepseek-ai/deepseek-llm-67b-chat",
 ]
 
 # Default system prompt
@@ -179,41 +179,23 @@ def process_stream(stream, response_container):
     response_text = ""
     for line in stream:
         if line:
-            decoded_line = line.decode('utf-8')
+            decoded_line = line.decode('utf-8').strip()
             if decoded_line.startswith("data: "):
-                chunk = json.loads(decoded_line[6:])["choices"][0]["delta"]["content"]
-                response_text += chunk
-                st.session_state.streaming_response = clean_response(response_text)
-                response_container.markdown(st.session_state.streaming_response)
-            elif decoded_line.startswith("event: done"):
+                try:
+                    chunk = json.loads(decoded_line[6:])
+                    if 'choices' in chunk and len(chunk['choices']) > 0 and 'delta' in chunk['choices'][0]:
+                        if 'content' in chunk['choices'][0]['delta']:
+                            response_text += chunk['choices'][0]['delta']['content']
+                            response_container.markdown(response_text)
+                            logger.info(f"Streaming chunk: {chunk['choices'][0]['delta']['content']}")
+                except json.JSONDecodeError as e:
+                    if decoded_line == "data: [DONE]":
+                        break
+                    logger.error(f"Streaming JSON decode error: {e}")
+                    logger.error(f"Streaming line content: {decoded_line}")
+            elif decoded_line == "[DONE]":
                 break
-    return clean_response(response_text)
-
-def process_fn(item, temperature=0.7, max_tokens=2048):
-    references = item.get("references", [])
-    model = item["model"]
-    messages = item["instruction"]
-
-    output = generate_with_references(
-        model=model,
-        messages=messages,
-        references=references,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        streaming=False  # Set to False for reference models
-    )
-    
-    # Collect the entire output
-    full_output = "".join(output) if isinstance(output, types.GeneratorType) else output
-
-    if DEBUG:
-        logger.info(
-            f"model {model}, instruction {item['instruction']}, output {full_output[:20]}",
-        )
-
-    st.write(f"Finished querying {model}.")
-
-    return {"output": full_output}
+    return response_text
 
 def run_timer(stop_event, elapsed_time):
     start_time = time.time()
@@ -274,7 +256,7 @@ def main():
                     st.session_state.conversation_deleted = True
 
         if st.button("Download Chat History"):
-            chat_history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[1:]])  
+            chat_history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[1:]])
             st.download_button(
                 label="Download Chat History",
                 data=chat_history,
@@ -307,13 +289,6 @@ def main():
         try:
             logger.info(f"Main model: {st.session_state.main_model}")
             logger.info(f"Selected models: {st.session_state.selected_models}")
-
-            data = {
-                "instruction": [st.session_state.messages for _ in range(len(st.session_state.selected_models))],
-                "references": [[] for _ in range(len(st.session_state.selected_models))],
-                "model": st.session_state.selected_models,
-            }
-            eval_set = datasets.Dataset.from_dict(data)
 
             with st.spinner("Generating response..."):
                 logger.info("Starting response generation process.")
