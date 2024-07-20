@@ -40,7 +40,7 @@ default_reference_models = [
     "google/gemma-2-27b-it",
     "Qwen/Qwen1.5-72B",
     "Qwen/Qwen2-72B-Instruct",
-    "deepseek-ai/deepseek-llm-67b-chat",
+    "meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
 ]
 
 # All available models
