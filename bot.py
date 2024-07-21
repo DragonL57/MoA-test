@@ -37,15 +37,16 @@ class SharedValue:
             return self.value
 
 default_reference_models = [
-    "google/gemma-2-27b-it",
-    "Qwen/Qwen1.5-72B",
+    "databricks/dbrx-instruct",
     "Qwen/Qwen2-72B-Instruct",
+    "google/gemma-2-27b-it",
     "meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
 ]
 
 # All available models
 all_models = [
     "deepseek-ai/deepseek-llm-67b-chat",
+    "databricks/dbrx-instruct",
     "google/gemma-2-27b-it",
     "Qwen/Qwen1.5-110B-Chat",
     "meta-llama/Llama-3-70b-chat-hf",
